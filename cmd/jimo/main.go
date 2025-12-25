@@ -33,6 +33,16 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+	case "make:model":
+		if err := runMakeModel(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+	case "make:controller":
+		if err := runMakeController(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(2)
@@ -44,6 +54,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  jimo new <project-name> [--module <module-path>] [--repo <git-url>] [--branch <branch>]")
 	fmt.Fprintln(os.Stderr, "  jimo serve [--port <port>] [--cmd <path>] ")
 	fmt.Fprintln(os.Stderr, "  jimo dev [--port <port>] [--cmd <path>]")
+	fmt.Fprintln(os.Stderr, "  jimo make:model <Name>")
+	fmt.Fprintln(os.Stderr, "  jimo make:controller <Name> [--api] [--resource]")
 }
 
 func runNew(args []string) error {
@@ -264,6 +276,184 @@ func ensureAirToml(cmdPath string) error {
 		"  clean_on_exit = true\n"
 
 	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func runMakeModel(args []string) error {
+	if len(args) < 1 {
+		return errors.New("missing model name")
+	}
+	name := args[0]
+	if name == "" {
+		return errors.New("model name cannot be empty")
+	}
+	dir := "app/models"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	file := filepath.Join(dir, strings.ToLower(name)+".go")
+	if _, err := os.Stat(file); err == nil {
+		return fmt.Errorf("model already exists: %s", file)
+	}
+	content := fmt.Sprintf(`package models
+
+import (
+	"github.com/jimo-go/framework/database"
+)
+
+type %s struct {
+	ID int `+"`json:\"id\"`"+`
+	// Add fields here
+}
+
+func (%s) TableName() string { return "%ss" }
+
+func %ss() *database.Record[%s] {
+	return database.Model[%s]()
+}
+`, name, name, strings.ToLower(name), strings.ToLower(name), name, name)
+	return os.WriteFile(file, []byte(content), 0o644)
+}
+
+func runMakeController(args []string) error {
+	var api, resource bool
+	var name string
+	// Manual parse to support --api and --resource
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--api":
+			api = true
+		case "--resource":
+			resource = true
+		default:
+			if name == "" && !strings.HasPrefix(args[i], "-") {
+				name = args[i]
+			}
+		}
+	}
+	if name == "" {
+		return errors.New("missing controller name")
+	}
+	dir := "app/http/controllers"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	file := filepath.Join(dir, strings.ToLower(name)+"_controller.go")
+	if _, err := os.Stat(file); err == nil {
+		return fmt.Errorf("controller already exists: %s", file)
+	}
+	var tmpl string
+	if api {
+		tmpl = apiControllerTmpl(name)
+	} else if resource {
+		tmpl = resourceControllerTmpl(name)
+	} else {
+		tmpl = basicControllerTmpl(name)
+	}
+	return os.WriteFile(file, []byte(tmpl), 0o644)
+}
+
+func basicControllerTmpl(name string) string {
+	return fmt.Sprintf(`package controllers
+
+import (
+	"github.com/jimo-go/framework"
+	jimohttp "github.com/jimo-go/framework/http"
+)
+
+type %sController struct{}
+
+func (c *%sController) Index(ctx *jimohttp.Context) {
+	ctx.String("Hello from %sController Index")
+}
+
+func (c *%sController) Show(ctx *jimohttp.Context) {
+	// TODO: implement Show
+}
+`, name, name, name, name)
+}
+
+func apiControllerTmpl(name string) string {
+	return fmt.Sprintf(`package controllers
+
+import (
+	"github.com/jimo-go/framework"
+	jimohttp "github.com/jimo-go/framework/http"
+)
+
+type %sController struct{}
+
+func (c *%sController) Index(ctx *jimohttp.Context) {
+	ctx.JSON(jimohttp.Map{"message": "%s index"})
+}
+
+func (c *%sController) Store(ctx *jimohttp.Context) {
+	// TODO: validate input and create
+	ctx.JSON(jimohttp.Map{"message": "%s created"})
+}
+
+func (c *%sController) Show(ctx *jimohttp.Context) {
+	// TODO: fetch and show
+	ctx.JSON(jimohttp.Map{"message": "%s show"})
+}
+
+func (c *%sController) Update(ctx *jimohttp.Context) {
+	// TODO: validate input and update
+	ctx.JSON(jimohttp.Map{"message": "%s updated"})
+}
+
+func (c *%sController) Destroy(ctx *jimohttp.Context) {
+	// TODO: delete
+	ctx.JSON(jimohttp.Map{"message": "%s deleted"})
+}
+`, name, name, name, name, name, name, name, name, name, name, name)
+}
+
+func resourceControllerTmpl(name string) string {
+	lower := strings.ToLower(name)
+	return `package controllers
+
+import (
+	"github.com/jimo-go/framework"
+	jimohttp "github.com/jimo-go/framework/http"
+)
+
+type ` + name + `Controller struct{}
+
+func (c *` + name + `Controller) Index(ctx *jimohttp.Context) {
+	// TODO: list ` + lower + `
+	ctx.String("List ` + name + `")
+}
+
+func (c *` + name + `Controller) Create(ctx *jimohttp.Context) {
+	// TODO: show create form
+	ctx.String("Create ` + name + ` form")
+}
+
+func (c *` + name + `Controller) Store(ctx *jimohttp.Context) {
+	// TODO: handle create form submission
+	ctx.String("Store ` + name + `")
+}
+
+func (c *` + name + `Controller) Show(ctx *jimohttp.Context) {
+	// TODO: show single ` + lower + `
+	ctx.String("Show ` + name + `")
+}
+
+func (c *` + name + `Controller) Edit(ctx *jimohttp.Context) {
+	// TODO: show edit form
+	ctx.String("Edit ` + name + ` form")
+}
+
+func (c *` + name + `Controller) Update(ctx *jimohttp.Context) {
+	// TODO: handle edit form submission
+	ctx.String("Update ` + name + `")
+}
+
+func (c *` + name + `Controller) Destroy(ctx *jimohttp.Context) {
+	// TODO: delete ` + lower + `
+	ctx.String("Destroy ` + name + `")
+}
+`
 }
 
 func runCmd(name string, args ...string) error {
